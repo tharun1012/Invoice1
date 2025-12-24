@@ -13,7 +13,19 @@ from ocr_service import process_bill_image
 app = Flask(__name__)
 
 # Allow all origins for development (CORS)
-CORS(app, supports_credentials=True)
+from flask_cors import CORS
+
+CORS(
+    app,
+    resources={
+        r"/api/*": {
+            "origins": [
+                "https://invoice1-frontend.onrender.com"
+            ]
+        }
+    }
+)
+
 
 # Configuration
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'heic'}
@@ -183,4 +195,6 @@ if __name__ == '__main__':
     print("  POST /api/extract-base64 - Extract from base64")
     print("=" * 50)
     
-    app.run(host='0.0.0.0', port=5000, debug=True)
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
