@@ -4,6 +4,7 @@ Flask API Server for Bill/Invoice OCR Extraction
 
 import os
 import tempfile
+import threading
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -12,20 +13,12 @@ from ocr_service import process_bill_image
 
 app = Flask(__name__)
 
-# ✅ CORS — allow frontend Render URL
-CORS(
-    app,
-    resources={
-        r"/api/*": {
-            "origins": ["https://invoice1-frontend.onrender.com"]
-        }
-    }
-)
+# ✅ ENABLE CORS FOR ALL ROUTES & ORIGINS (REQUIRED FOR BROWSER)
+CORS(app)
 
 # Configuration
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'heic'}
 MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB
-
 app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 
 
@@ -33,7 +26,7 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-@app.route("/api/health", methods=["GET"])
+@app.route('/api/health', methods=['GET'])
 def health_check():
     return jsonify({
         "status": "healthy",
@@ -42,69 +35,64 @@ def health_check():
     })
 
 
-@app.route("/api/extract", methods=["POST"])
+@app.route('/api/extract', methods=['POST'])
 def extract_invoice():
-    if "image" not in request.files:
-        return jsonify({"success": False, "error": "No image file"}), 400
+    if 'image' not in request.files:
+        return jsonify({"success": False, "error": "No image uploaded"}), 400
 
-    file = request.files["image"]
+    file = request.files['image']
 
-    if file.filename == "":
+    if file.filename == '':
         return jsonify({"success": False, "error": "Empty filename"}), 400
 
     if not allowed_file(file.filename):
-        return jsonify({"success": False, "error": "Invalid file type"}), 400
+        return jsonify({"success": False, "error": "Unsupported file type"}), 400
+
+    temp_dir = tempfile.mkdtemp()
+    temp_path = os.path.join(temp_dir, secure_filename(file.filename))
+    file.save(temp_path)
+
+    result = {
+        "success": False,
+        "error": "OCR timeout",
+        "header": {},
+        "items": []
+    }
+
+    def run_ocr():
+        nonlocal result
+        result = process_bill_image(temp_path)
+
+    t = threading.Thread(target=run_ocr)
+    t.start()
+    t.join(timeout=25)  # ⏱️ Render free-tier safe
 
     try:
-        temp_dir = tempfile.mkdtemp()
-        filename = secure_filename(file.filename)
-        path = os.path.join(temp_dir, filename)
-        file.save(path)
+        os.remove(temp_path)
+        os.rmdir(temp_dir)
+    except:
+        pass
 
-        try:
-            result = process_bill_image(path)
-            return jsonify(result), 200 if result.get("success") else 422
-        finally:
-            os.remove(path)
-            os.rmdir(temp_dir)
+    if t.is_alive():
+        return jsonify({
+            "success": False,
+            "error": "OCR processing timed out"
+        }), 504
 
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+    if result.get("success"):
+        return jsonify(result), 200
 
-
-@app.route("/api/extract-base64", methods=["POST"])
-def extract_from_base64():
-    import base64
-
-    data = request.get_json()
-    if not data or "image" not in data:
-        return jsonify({"success": False, "error": "No image data"}), 400
-
-    try:
-        image_data = data["image"]
-        if "," in image_data:
-            image_data = image_data.split(",")[1]
-
-        image_bytes = base64.b64decode(image_data)
-
-        temp_dir = tempfile.mkdtemp()
-        path = os.path.join(temp_dir, "image.jpg")
-
-        with open(path, "wb") as f:
-            f.write(image_bytes)
-
-        try:
-            result = process_bill_image(path)
-            return jsonify(result), 200 if result.get("success") else 422
-        finally:
-            os.remove(path)
-            os.rmdir(temp_dir)
-
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+    return jsonify(result), 422
 
 
-# ✅ ONLY ONE main block — REQUIRED FOR RENDER
+@app.route('/api/extract-base64', methods=['POST'])
+def extract_base64():
+    return jsonify({
+        "success": False,
+        "error": "Not implemented"
+    }), 501
+
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
